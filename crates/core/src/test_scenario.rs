@@ -41,11 +41,7 @@ use contender_engine_provider::ControlChain;
 use futures::{Stream, StreamExt};
 use serde_json::json;
 use std::{
-    collections::{BTreeMap, HashMap},
-    pin::Pin,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant},
+    collections::{BTreeMap, HashMap}, ops::Mul, pin::Pin, str::FromStr, sync::Arc, time::{Duration, Instant}
 };
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
@@ -210,7 +206,7 @@ where
         } = params;
 
         let (setcode_signer, _) = generate_setcode_signer(&rand_seed);
-        debug!("setCode signer address: {}", setcode_signer.address());
+        info!("setCode signer address: {}", setcode_signer.address());
 
         // use custom logging layer to log sendRawTransaction request IDs
         let client = ClientBuilder::default()
@@ -241,9 +237,10 @@ where
         }
 
         for (name, agent) in agent_store.all_agents() {
-            debug!("adding '{name}' signers to wallet map");
             for signer in agent.signers.iter() {
-                signer_map.insert(signer.address(), signer.clone());
+                let signer_addr = signer.address();
+                 info!("adding '{name}', '{signer_addr}', signers to wallet map");
+                signer_map.insert(signer_addr, signer.clone());
             }
         }
 
@@ -378,7 +375,7 @@ where
             None => self.rpc_client.get_gas_price().await?,
         };
 
-        debug!(
+        info!(
             "reference gas price: {}gwei",
             format_units(gas_price, "gwei").unwrap()
         );
@@ -452,7 +449,7 @@ where
         let fund_amount = if addresses.len() >= 999 {
             U256::from(999999 * ETH_TO_WEI / addresses.len() as u128)
         } else {
-            U256::from(1000 * ETH_TO_WEI)
+            U256::from(10000 * ETH_TO_WEI)
         };
 
         let mut start_balances: HashMap<Address, U256> = HashMap::new();
@@ -467,9 +464,9 @@ where
                 .await?;
         }
 
-        debug!("deploying sim contracts...");
+        info!("deploying sim contracts...");
         scenario.deploy_contracts().await?;
-        debug!("sim contracts deployed, running setup...");
+        info!("sim contracts deployed, running setup...");
         scenario.run_setup().await?;
 
         let mut total_cost = U256::ZERO;
@@ -483,7 +480,7 @@ where
         }
 
         println!("{}", SETUP_SIM_END);
-        debug!("estimated setup cost: {}", format_ether(total_cost));
+        info!("estimated setup cost: {}", format_ether(total_cost));
 
         // Shutdown the temporary simulation scenario to stop its actors
         scenario.shutdown().await;
@@ -557,6 +554,7 @@ where
             redeploy,
             genesis_hash,
         } = params;
+        let address = signer.address();
         let wallet = EthereumWallet::from(signer.to_owned());
         let wallet_client = ProviderBuilder::new()
             .wallet(&wallet)
@@ -608,14 +606,22 @@ where
             blob_gas_price,
         );
 
-        let res = wallet_client
+        let value = tx.value.unwrap_or_default();
+        let balance = wallet_client.get_balance(address.clone()).await.unwrap();
+        let xxx = format_units(gas_price.mul(gas_limit as u128), "eth").unwrap();
+        info!(
+            "before contract address : {} balance {}  value {} require {}",address, balance, value, xxx
+        );
+        let res: alloy::providers::PendingTransactionBuilder<AnyNetwork> = wallet_client
             .send_transaction(WithOtherFields::new(tx))
             .await?;
         // watch pending transaction
         let receipt = res.get_receipt().await.expect("failed to get receipt");
-        debug!(
-            "contract address: {}",
-            receipt.contract_address.unwrap_or_default()
+        let after_balance = wallet_client.get_balance(address.clone()).await.unwrap();
+        info!(
+            "contract address: {} after balance {}",
+            receipt.contract_address.unwrap_or_default(),
+            after_balance
         );
         if let Some(name) = &tx_req.name {
             db.insert_named_txs(
@@ -748,16 +754,31 @@ where
             .ok_or(RuntimeErrorKind::TxMissingFromAddress(Box::new(
                 tx_req.to_owned(),
             )))?;
-        let nonce = self
+        {
+            let nonce_op = {
+                self
+                .nonces
+                .get(&from).clone()
+            };
+            if nonce_op.is_none() {
+                warn!("nonce missing for address {}, syncing nonces...", from);
+                self.nonces.insert(from.to_owned(), 0);
+                self.sync_nonces().await?;
+            }
+        }
+        let nonce_op = {
+            self
             .nonces
-            .get(&from)
+            .get(&from).clone()
+        };
+        let nonce = nonce_op
             .ok_or(RuntimeErrorKind::NonceMissing(from))?
             .to_owned();
         let setcode_signer_addr = self.setcode_signer.address();
         let setcode_signer_nonce = self
             .nonces
             .get(&setcode_signer_addr)
-            .ok_or(RuntimeErrorKind::NonceMissing(from))?
+            .ok_or(RuntimeErrorKind::NonceMissing(setcode_signer_addr))?
             .to_owned();
 
         self.nonces.insert(from.to_owned(), nonce + 1);
@@ -992,6 +1013,7 @@ where
                                 Vec::<Option<tokio::task::JoinHandle<_>>>::new()
                             }
                             Err(e) => {
+                                println!("send_tx_envelope fail {:?}", e);
                                 let msg_string = e
                                     .as_error_resp()
                                     .map(|err| err.message.to_string())
@@ -1674,6 +1696,7 @@ async fn sync_nonces(
 
     debug!("waiting for nonces to sync...");
     while let Some((addr, nonce)) = receiver.recv().await {
+        info!("synced nonce for {}: {}", addr, nonce);
         nonces.insert(addr, nonce);
     }
 

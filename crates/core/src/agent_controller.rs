@@ -3,8 +3,8 @@ use crate::{
     Result,
 };
 use alloy::{
-    network::{AnyNetwork, AnyTxEnvelope, EthereumWallet, TransactionBuilder},
-    primitives::{utils::format_ether, Address, FixedBytes, TxKind, U256},
+    network::{AnyNetwork, AnyTxEnvelope, EthereumWallet, ReceiptResponse, TransactionBuilder},
+    primitives::{Address, FixedBytes, TxKind, U256, utils::format_ether},
     rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
 };
@@ -158,6 +158,7 @@ impl SignerStore {
         let signers = self.all_addresses();
         let chain_id = provider.get_chain_id().await?;
 
+        println!("funder address: {}", funder.address());
         // create transaction request for each signer
         let tx_requests = signers
             .into_iter()
@@ -167,7 +168,7 @@ impl SignerStore {
                     .value(amount)
                     .from(funder.address())
                     .nonce(nonce)
-                    .gas_limit(21000)
+                    .gas_limit(51000)
                     .max_fee_per_gas(gas_price)
                     .with_chain_id(chain_id)
                     .max_priority_fee_per_gas(gas_price / 10);
@@ -189,24 +190,28 @@ impl SignerStore {
         }
 
         // send txs
-        let mut sent_txs = vec![];
         for (signed_tx, to_addr) in signed_txs {
             let provider = provider.clone();
 
             // Sleep to avoid overwhelming the provider with requests
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
             let pending_tx = provider
                 .send_tx_envelope(AnyTxEnvelope::Ethereum(signed_tx))
                 .await?;
-            sent_txs.push(pending_tx);
-            info!("Funding {to_addr} with {} ether", format_ether(amount));
+            let tx_hash = pending_tx.with_required_confirmations(3).watch().await?;
+            let receipt = provider.get_transaction_receipt(tx_hash.clone()).await?.unwrap();
+            let to_addr = receipt.to().unwrap_or_default();
+            for _ in 0..1000 {
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                let rawtx = provider.get_transaction_by_hash(tx_hash.clone()).await?.unwrap();
+
+                let json_str =  serde_json::to_string(&rawtx).unwrap();
+                println!("xxx signed tx: {} {tx_hash}", json_str);
+            }
+            
+            info!("funding tx landed: {tx_hash} {to_addr}, {}", receipt.status());
         }
 
-        for tx in sent_txs {
-            let tx_hash = tx.with_required_confirmations(1).watch().await?;
-            debug!("funding tx landed: {tx_hash}");
-        }
 
         Ok(())
     }

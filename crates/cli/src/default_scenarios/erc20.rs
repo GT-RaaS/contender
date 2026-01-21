@@ -95,7 +95,7 @@ impl ToTestConfig for Erc20Args {
                             }),
                         self.send_amount.to_string(),
                     ])
-                    .with_gas_limit(55000);
+                    .with_gas_limit(55000 * 4);
 
                 // Only add fuzzing if token_recipient is NOT provided
                 if self.token_recipient.is_none() {

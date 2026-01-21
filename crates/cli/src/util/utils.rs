@@ -2,6 +2,8 @@ use crate::commands::error::{ArgsError, SetupError};
 use crate::error::CliError;
 use crate::util::error::ParseDurationError;
 use crate::{commands::common::EngineParams, util::error::UtilError};
+use alloy::primitives::TxHash;
+use alloy::rpc;
 use alloy::{
     consensus::TxType,
     hex::{self, ToHexExt},
@@ -21,9 +23,11 @@ use contender_core::{
 use contender_engine_provider::DEFAULT_BLOCK_TIME;
 use contender_testfile::TestConfig;
 use nu_ansi_term::{AnsiGenericString, Style as ANSIStyle};
+use op_alloy_network::ReceiptResponse;
 use rand::Rng;
 use std::{str::FromStr, sync::Arc, time::Duration};
 use tracing::{debug, info, warn};
+use tokio::sync::Semaphore;
 
 pub const DEFAULT_PRV_KEYS: [&str; 10] = [
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
@@ -155,7 +159,7 @@ pub async fn fund_accounts(
 
     // pre-check if admin account has sufficient balance
     let gas_price = rpc_client.get_gas_price().await?;
-    let gas_cost_per_tx = U256::from(21000) * U256::from(gas_price + (gas_price / 10));
+    let gas_cost_per_tx = U256::from(50000) * U256::from(gas_price + (gas_price / 10));
     let chain_id = rpc_client.get_chain_id().await?;
 
     let total_cost = U256::from(insufficient_balances.len()) * (min_balance + gas_cost_per_tx);
@@ -173,7 +177,7 @@ pub async fn fund_accounts(
 
     let mut fund_handles: Vec<tokio::task::JoinHandle<_>> = vec![];
     let (sender_pending_tx, mut receiver_pending_tx) =
-        tokio::sync::mpsc::channel::<PendingTransactionConfig>(9000);
+        tokio::sync::mpsc::unbounded_channel::<PendingTransactionConfig>();
 
     let rpc_client = Arc::new(rpc_client.to_owned());
 
@@ -205,13 +209,19 @@ pub async fn fund_accounts(
             insufficient_balances.len()
         );
     }
+
+    let max_concurrency = 50; // 👈 关键参数（9944 建议 4~16）
+    let semaphore = Arc::new(Semaphore::new(max_concurrency));
+
     for (idx, (address, _)) in insufficient_balances.into_iter().enumerate() {
         let fund_amount = min_balance;
         let fund_with = fund_with.to_owned();
         let sender = sender_pending_tx.clone();
         let rpc_client = rpc_client.clone();
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
 
         fund_handles.push(tokio::task::spawn(async move {
+              let _permit = permit;
             let res = fund_account(
                 &fund_with,
                 address,
@@ -221,7 +231,9 @@ pub async fn fund_accounts(
                 tx_type,
             )
             .await?;
-            sender.send(res).await.expect("failed to handle pending tx");
+            if let Err(e) = sender.send(res) {
+                panic!("failed to send pending tx to channel: {:?}", e);
+            }
 
             Ok::<_, CliError>(())
         }));
@@ -233,6 +245,7 @@ pub async fn fund_accounts(
             handle.await??;
         }
     }
+    info!("close receiver_pending_tx");
     receiver_pending_tx.close();
 
     tokio::time::sleep(Duration::from_secs(DEFAULT_BLOCK_TIME)).await;
@@ -266,7 +279,12 @@ pub async fn fund_accounts(
 
             match watch_result {
                 Ok(Ok(receipt)) => {
-                    info!("funding tx confirmed ({})", receipt);
+                    let rawtx = rpc_client.get_transaction_by_hash(tx_hash.clone()).await?.unwrap();
+                    let json_str =  serde_json::to_string(&rawtx).unwrap();
+                    let receipt = rpc_client.get_transaction_receipt(tx_hash.clone()).await?.unwrap();
+                    let to_addr = receipt.to().unwrap_or_default();
+                    info!("funding tx raw: {}", json_str);
+                    info!("funding tx confirmed {tx_hash}, {to_addr}, ({})", receipt.status());
                 }
                 Ok(Err(e)) => {
                     return Err(SetupError::FundingTxFailed(tx_hash, e).into());
@@ -308,7 +326,7 @@ pub async fn fund_account(
         tx_type,
         gas_price,
         gas_price / 10,
-        21000,
+        51000,
         chain_id,
         blob_gas_price,
     );
