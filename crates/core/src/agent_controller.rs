@@ -200,7 +200,7 @@ impl SignerStore {
             let pending_tx = provider
                 .send_tx_envelope(AnyTxEnvelope::Ethereum(signed_tx))
                 .await
-                .map_err(|err| RuntimeErrorKind::AnvilUnchecked("xxxxxxxx".to_string()))?;
+                .map_err(|err| RuntimeErrorKind::AnvilUnchecked(format!("xxxxx {err}")))?;
             sent_txs.push(pending_tx);
             info!("Funding {to_addr} with {} ether", format_ether(amount));
         }
