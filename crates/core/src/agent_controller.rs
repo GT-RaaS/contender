@@ -8,6 +8,7 @@ use alloy::{
     rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
 };
+use crate::error::RuntimeErrorKind;
 use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, info};
 
@@ -198,7 +199,8 @@ impl SignerStore {
 
             let pending_tx = provider
                 .send_tx_envelope(AnyTxEnvelope::Ethereum(signed_tx))
-                .await?;
+                .await
+                .map_err(|err| RuntimeErrorKind::AnvilUnchecked("xxxxxxxx".to_string()))?;
             sent_txs.push(pending_tx);
             info!("Funding {to_addr} with {} ether", format_ether(amount));
         }
