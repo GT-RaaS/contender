@@ -201,13 +201,6 @@ impl SignerStore {
             let tx_hash = pending_tx.with_required_confirmations(3).watch().await?;
             let receipt = provider.get_transaction_receipt(tx_hash.clone()).await?.unwrap();
             let to_addr = receipt.to().unwrap_or_default();
-            for _ in 0..1000 {
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                let rawtx = provider.get_transaction_by_hash(tx_hash.clone()).await?.unwrap();
-
-                let json_str =  serde_json::to_string(&rawtx).unwrap();
-                println!("xxx signed tx: {} {tx_hash}", json_str);
-            }
             
             info!("funding tx landed: {tx_hash} {to_addr}, {}", receipt.status());
         }
