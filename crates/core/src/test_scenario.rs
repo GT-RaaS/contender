@@ -383,7 +383,7 @@ where
         // start anvil with dev accounts holding 1M eth
         let mut anvil = Anvil::new().args([
             "--balance",
-            "1000000",
+            "1000000000",
             "--gas-price",
             &(gas_price + GWEI_TO_WEI as u128 * 5).to_string(),
         ]);
