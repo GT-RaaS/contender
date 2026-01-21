@@ -158,7 +158,6 @@ impl SignerStore {
         let signers = self.all_addresses();
         let chain_id = provider.get_chain_id().await?;
 
-        println!("funder address: {}", funder.address());
         // create transaction request for each signer
         let tx_requests = signers
             .into_iter()
@@ -190,21 +189,26 @@ impl SignerStore {
         }
 
         // send txs
+        let mut sent_txs = vec![];
         for (signed_tx, to_addr) in signed_txs {
             let provider = provider.clone();
 
             // Sleep to avoid overwhelming the provider with requests
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
             let pending_tx = provider
                 .send_tx_envelope(AnyTxEnvelope::Ethereum(signed_tx))
                 .await?;
-            let tx_hash = pending_tx.with_required_confirmations(3).watch().await?;
-            let receipt = provider.get_transaction_receipt(tx_hash.clone()).await?.unwrap();
-            let to_addr = receipt.to().unwrap_or_default();
-            
-            info!("funding tx landed: {tx_hash} {to_addr}, {}", receipt.status());
+            sent_txs.push(pending_tx);
+            info!("Funding {to_addr} with {} ether", format_ether(amount));
         }
 
+        for tx in sent_txs {
+            let tx_hash = tx.with_required_confirmations(3).watch().await?;
+            let receipt = provider.get_transaction_receipt(tx_hash.clone()).await?.unwrap();
+            let to_addr = receipt.to().unwrap_or_default();
+            info!("funding tx landed: {tx_hash} {to_addr}, {}", receipt.status());
+        }
 
         Ok(())
     }
