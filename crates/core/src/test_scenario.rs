@@ -1360,6 +1360,7 @@ where
     /// Returns the maximum cost of a single spam transaction by creating a new scenario
     /// and running estimateGas calls to estimate the cost of the spam transactions.
     pub async fn get_max_spam_cost(&self, user_signers: &[PrivateKeySigner]) -> Result<U256> {
+        debug!("get_max_spam_cost");
         // separate prometheus registry for simulations; anvil doesn't count!
         static PROM: OnceCell<prometheus::Registry> = OnceCell::const_new();
         static HIST: OnceCell<prometheus::HistogramVec> = OnceCell::const_new();
@@ -1460,6 +1461,7 @@ where
         txs_per_period: u64,
         num_periods: u64,
     ) -> Result<Vec<Vec<ExecutionRequest>>> {
+              debug!("get_spam_tx_chunks");
         let tx_requests = self
             .load_txs(crate::generator::PlanType::Spam(
                 txs_per_period * num_periods,
